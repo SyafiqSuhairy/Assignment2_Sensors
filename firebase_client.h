@@ -5,8 +5,8 @@
 #include "addons/TokenHelper.h"
 #include "addons/RTDBHelper.h"
 
-#include "display_utils.h"
-#include "eeprom_utils.h"
+#include "display_manager.h"
+#include "eeprom_storage.h"
 
 #define FIREBASE_PROJECT_URL "https://esp-project-25857-default-rtdb.asia-southeast1.firebasedatabase.app/"
 #define FIREBASE_API_KEY "AIzaSyDujFmyj4gC_qSMuYzNalpDuZEa_61adqM"

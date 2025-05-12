@@ -4,65 +4,84 @@
 
 #include <EEPROM.h>
 
-String savedSSID = "";
-String savedPassword = "";
-String savedDeviceID = "";
+// Global variables accessible across files
+extern String ssid;
+extern String pass;
+extern String devid;
 
-void wipeEEPROM();  // Pre-declare
+// Initialize the global variables
+String ssid = "";
+String pass = "";
+String devid = "";
+
+// Function declarations
+void writeCredentialsToEEPROM(String ssid, String pass, String deviceID);
+void clearEEPROM();
+void loadFromEEPROM();
 
 void loadFromEEPROM() {
   EEPROM.begin(512);
   Serial.println("Loading stored data...");
 
-  savedSSID = "";
-  savedPassword = "";
-  savedDeviceID = "";
+  ssid = "";
+  pass = "";
+  devid = "";
 
   for (int i = 0; i < 20; i++) {
     char c = char(EEPROM.read(i));
-    if (c != 0) savedSSID += c;
+    if (c != 0) ssid += c;
   }
   for (int i = 20; i < 40; i++) {
     char c = char(EEPROM.read(i));
-    if (c != 0) savedPassword += c;
+    if (c != 0) pass += c;
   }
   for (int i = 40; i < 60; i++) {
     char c = char(EEPROM.read(i));
-    if (c != 0) savedDeviceID += c;
+    if (c != 0) devid += c;
   }
 
   EEPROM.end();
 
-  Serial.println("WiFi SSID: " + savedSSID);
-  Serial.println("WiFi Password: " + savedPassword);
-  Serial.println("Device ID: " + savedDeviceID);
+  Serial.println("WiFi SSID: " + ssid);
+  Serial.println("WiFi Password: " + pass);
+  Serial.println("Device ID: " + devid);
 }
 
-void saveToEEPROM(String ssid, String pass, String deviceID) {
-  wipeEEPROM();
+void writeCredentialsToEEPROM(String newSSID, String newPASS, String newID) {
+  clearEEPROM();
   EEPROM.begin(512);
   Serial.println("Saving credentials...");
 
-  for (int i = 0; i < ssid.length(); i++) EEPROM.write(i, ssid[i]);
-  EEPROM.write(ssid.length(), 0);
-  for (int i = 0; i < pass.length(); i++) EEPROM.write(20 + i, pass[i]);
-  EEPROM.write(20 + pass.length(), 0);
-  for (int i = 0; i < deviceID.length(); i++) EEPROM.write(40 + i, deviceID[i]);
-  EEPROM.write(40 + deviceID.length(), 0);
+  for (int i = 0; i < newSSID.length(); i++) EEPROM.write(i, newSSID[i]);
+  EEPROM.write(newSSID.length(), 0);
+  for (int i = 0; i < newPASS.length(); i++) EEPROM.write(20 + i, newPASS[i]);
+  EEPROM.write(20 + newPASS.length(), 0);
+  for (int i = 0; i < newID.length(); i++) EEPROM.write(40 + i, newID[i]);
+  EEPROM.write(40 + newID.length(), 0);
 
   EEPROM.commit();
   EEPROM.end();
 
+  // Update global variables
+  ssid = newSSID;
+  pass = newPASS;
+  devid = newID;
+
   Serial.println("Saved to EEPROM");
 }
 
-void wipeEEPROM() {
+void clearEEPROM() {
   EEPROM.begin(512);
   for (int i = 0; i < 512; i++) EEPROM.write(i, 0);
   EEPROM.commit();
   EEPROM.end();
 
-  Serial.println("EEPROM wiped clean");
+  // Clear global variables
+  ssid = "";
+  pass = "";
+  devid = "";
+
+  Serial.println("EEPROM cleared");
 }
 
 #endif

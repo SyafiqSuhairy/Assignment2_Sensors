@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Home Page</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+</head>
+
+<body>
+    <div class="home-container">
+        <h3>Welcome: <span id="userEmail"></span></h3>
+        <button onclick="logout()">Logout</button>
+
+        <h3>Sample Text from Firebase:</h3>
+        <p id="sampleTextDisplay">Loading...</p>
+        <button onclick="getSampleText()">Load Text</button>
+
+        <h3>Update Sample Text</h3>
+        <input type="text" id="newSampleText" placeholder="Enter new text">
+        <button onclick="updateSampleText()">Update Text</button>
+    </div>
+
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyDujFmyj4gC_qSMuYzNalpDuZEa_61adqM",
+            authDomain: "esp-project-25857.firebaseapp.com",
+            databaseURL: "https://esp-project-25857-default-rtdb.asia-southeast1.firebasedatabase.app/",
+            projectId: "esp-project-25857",
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const database = firebase.database();
+
+        auth.onAuthStateChanged(user => {
+            if (user) {
+                document.getElementById("userEmail").textContent = user.email;
+            } else {
+                window.location.href = "index.html";
+            }
+        });
+
+        function logout() {
+            auth.signOut().then(() => {
+                window.location.href = "index.html";
+            });
+        }
+
+        function getSampleText() {
+            database.ref("texts/sample_text").once("value").then(snapshot => {
+                document.getElementById("sampleTextDisplay").textContent = snapshot.val();
+            });
+        }
+
+        function updateSampleText() {
+            const newText = document.getElementById("newSampleText").value;
+            const now = new Date();
+            const offsetMs = 8 * 60 * 60 * 1000; // GMT+8 offset
+            const malaysiaTime = new Date(now.getTime() + offsetMs);
+            const timestamp = malaysiaTime.toISOString().replace("T", " ").split(".")[0]; // e.g., "2025-05-09 10:34:56"
+
+            database.ref("texts/sample_text").set(newText)
+                .then(() => {
+                    return database.ref("texts/last_updated").set(timestamp);
+                })
+                .then(getSampleText)
+                .catch((error) => {
+                    console.error("Error updating Firebase:", error);
+                });
+        }
+    </script>
+</body>
+
+</html>

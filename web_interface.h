@@ -2,7 +2,7 @@
 #define WEB_INTERFACE_H
 
 #include <WebServer.h>
-#include "eeprom_utils.h"
+#include "eeprom_storage.h"
 
 WebServer configServer(80);
 
