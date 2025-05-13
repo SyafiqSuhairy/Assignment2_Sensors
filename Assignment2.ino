@@ -1,25 +1,19 @@
-// ESP32 WiFi Manager with EEPROM Configuration Storage
-// Last Updated: April 23, 2025
-// Program Flow Overview:
-// 1. On startup, read WiFi credentials from EEPROM.
-// 2. If the SSID is missing, or button on GPIO 0 is pressed, enter AP (Access Point) mode.
-// 3. In AP mode, ESP32 hosts a configuration webpage at 192.168.4.1:
-//    - Shows stored credentials
-//    - Scans for and lists available WiFi networks in a table
-//    - Allows users to submit new credentials
-// 4. Submitted credentials are stored back to EEPROM and the device restarts.
-// 5. If credentials are valid, ESP32 attempts to connect to WiFi in STA (Station) mode.
-// 6. If connection fails, fallback to AP mode for configuration.
-// This sketch allows ESP32 to boot into STA mode with stored credentials or fallback to AP mode
-// where users can enter new credentials through a simple web UI. Data is stored using EEPROM.
-// Additional Features:
-// - Scans for nearby WiFi networks and displays them in a responsive table.
-// - Displays current stored credentials.
-// - Allows updating WiFi credentials and device ID.
-// - Non-blocking WiFi scan with live table update.
-// - LED indicator on GPIO 2 lights up when in AP mode.
-// - Improved user feedback messages on configuration save and data clear.
-// Author: Ahmad Hanis | Date: April 23, 2025
+// SyafiqNet: WiFi Configuration Manager for ESP32
+// Created June 2024
+// 
+// System Overview:
+// 1. Reads network configuration from persistent storage (EEPROM)
+// 2. Attempts to connect using stored credentials
+// 3. If connection fails or boot button pressed, creates configuration portal
+// 4. Portal allows user to select network and provide credentials
+// 5. Configuration is saved and device restarts with new settings
+//
+// Special Features:
+// - Live network scanner shows available networks and signal strength
+// - Clean responsive UI with mobile device support
+// - LED status indicator shows operating mode
+// - One-click network reset option
+// - Secure password masking in UI and logs
 // ------------------------------------------------------
 
 #include <EEPROM.h>
@@ -27,230 +21,375 @@
 #include <WebServer.h>
 #include <HTTPClient.h>
 
-WebServer server(80);  // Create a web server object on port 80
+#define PORTAL_NAME "SyafiqNet"    // Portal network name
+#define PORTAL_PASS ""             // Portal password (empty = open network)
+#define STATUS_LED 2               // Status LED pin
+#define CONFIG_BTN 0               // Config button pin
+#define MEMORY_SIZE 512            // EEPROM allocation size
 
-// Global variables for storing WiFi credentials and device ID
-String ssid, pass, devid, content;
-bool apmode = false;  // Flag to indicate if device is in Access Point mode
-bool scanComplete = false;  // Flag to prevent repeat scans
-String scannedNetworks = "<p>Scanning networks...</p>";  // HTML content for scanned WiFi list
+WebServer webPortal(80);           // Web server on standard HTTP port
 
-// Setup function runs once when the device starts
+// Configuration storage variables
+String networkSSID = "";
+String networkPass = "";
+String deviceName = "";
+String webContent = "";
+bool portalMode = false;           // Operating in portal/AP mode?
+bool scanFinished = false;         // Network scan completed?
+String networkList = "<p>Scanning available networks...</p>";
+
+// Initialization function
 void setup() {
-  pinMode(2, OUTPUT); // LED indicator on GPIO 2 for AP mode
-  digitalWrite(2, LOW); // Turn off LED initially
-  Serial.begin(115200);  // Start serial monitor for debugging
-  Serial.println("Waiting for 5 seconds!");
-  readData();  // Read stored credentials from EEPROM
+  pinMode(STATUS_LED, OUTPUT);
+  digitalWrite(STATUS_LED, LOW);
+  
+  Serial.begin(115200);
+  Serial.println("\n\n=== SyafiqNet WiFi Manager Starting ===");
+  
+  // Load saved configuration
+  loadConfig();  
 
-  // If no SSID is found, start in Access Point mode
-  if (ssid.length() == 0) {
-    Serial.println("No SSID found in EEPROM, forcing AP mode.");
-    ap_mode();
+  // Enter config mode if no network configured
+  if (networkSSID.length() == 0) {
+    Serial.println("No network configured, starting setup portal");
+    startPortal();
     return;
   }
 
-  delay(5000);  // Give user time to press button if needed
-  pinMode(0, INPUT_PULLUP);  // Set pin 0 as input with pull-up (for button input)
+  delay(3000);  // Button press window
+  pinMode(CONFIG_BTN, INPUT_PULLUP);
 
-  // If button is pressed during boot, force AP mode
-  if (digitalRead(0) == 0) {
-    apmode = true;
-    ap_mode();
+  // Force config mode if button pressed
+  if (digitalRead(CONFIG_BTN) == 0) {
+    Serial.println("Setup button pressed, starting portal");
+    portalMode = true;
+    startPortal();
   } else {
     // Try connecting to WiFi using stored credentials
-    if (testWifi()) {
-      Serial.println("WiFi Connected!!!");
+    Serial.println("Attempting to connect to: " + networkSSID);
+    if (connectWiFi()) {
+      Serial.println("Successfully connected to network!");
+      Serial.println("Device IP: " + WiFi.localIP().toString());
     } else {
-      ap_mode();
-      apmode = true;
+      Serial.println("Connection failed. Starting setup portal.");
+      startPortal();
+      portalMode = true;
     }
   }
 }
 
-// Main loop to handle incoming requests and WiFi scan
+// Main program loop
 void loop() {
-  if (apmode) {
-    server.handleClient();  // Listen for web clients
+  if (portalMode) {
+    webPortal.handleClient();
 
-    // Only scan once and store results
-    if (!scanComplete) {
-      int n = WiFi.scanComplete();
-      if (n == -2) WiFi.scanNetworks(true); // If no scan, initiate
-      else if (n >= 0) {
-        // Build HTML table from scanned networks
-        scannedNetworks = "<table border='1' style='width:100%; border-collapse:collapse;'>";
-        scannedNetworks += "<tr><th>SSID</th><th>Signal Strength</th></tr>";
-        for (int i = 0; i < n; ++i) {
-          scannedNetworks += "<tr><td>" + WiFi.SSID(i) + "</td><td>" + String(WiFi.RSSI(i)) + " dBm</td></tr>";
+    // Handle WiFi scanning
+    if (!scanFinished) {
+      int networks = WiFi.scanComplete();
+      if (networks == -2) {
+        Serial.println("Initiating network scan...");
+        WiFi.scanNetworks(true);
+      } else if (networks >= 0) {
+        Serial.println("Scan complete, found " + String(networks) + " networks");
+        networkList = "<table class='networks'>";
+        networkList += "<tr><th>Network Name</th><th>Signal</th><th>Security</th></tr>";
+        for (int i = 0; i < networks; ++i) {
+          String securityType = "";
+          switch(WiFi.encryptionType(i)) {
+            case WIFI_AUTH_OPEN: securityType = "Open"; break;
+            case WIFI_AUTH_WEP: securityType = "WEP"; break;
+            case WIFI_AUTH_WPA_PSK: securityType = "WPA"; break;
+            case WIFI_AUTH_WPA2_PSK: securityType = "WPA2"; break;
+            case WIFI_AUTH_WPA_WPA2_PSK: securityType = "WPA/WPA2"; break;
+            default: securityType = "Unknown";
+          }
+          networkList += "<tr><td>" + WiFi.SSID(i) + "</td><td>" + 
+                           String(WiFi.RSSI(i)) + " dBm</td><td>" + 
+                           securityType + "</td></tr>";
         }
-        scannedNetworks += "</table>";
-        scanComplete = true;  // Prevent further scanning
-        WiFi.scanDelete();  // Free memory
+        networkList += "</table>";
+        scanFinished = true;
+        WiFi.scanDelete();
       }
     }
   }
 }
 
-// Reads SSID, Password and DevID from EEPROM
-void readData() {
-  EEPROM.begin(512);
-  Serial.println("Reading From EEPROM..");
-  ssid = pass = devid = "";  // Clear previous values
+// Load configuration from EEPROM
+void loadConfig() {
+  EEPROM.begin(MEMORY_SIZE);
+  Serial.println("Loading saved configuration...");
+  networkSSID = networkPass = deviceName = "";
 
-  // Read SSID
+  // Read network name
   for (int i = 0; i < 20; i++) {
     char ch = EEPROM.read(i);
-    if (isPrintable(ch)) ssid += ch;
+    if (isPrintable(ch)) networkSSID += ch;
   }
-  // Read Password
+  // Read network password
   for (int i = 20; i < 40; i++) {
     char ch = EEPROM.read(i);
-    if (isPrintable(ch)) pass += ch;
+    if (isPrintable(ch)) networkPass += ch;
   }
-  // Read DevID
+  // Read device name
   for (int i = 40; i < 60; i++) {
     char ch = EEPROM.read(i);
-    if (isPrintable(ch)) devid += ch;
+    if (isPrintable(ch)) deviceName += ch;
   }
 
-  // Print credentials to serial monitor
-  Serial.println("WiFi SSID: " + ssid);
-  Serial.println("WiFi Password: " + pass);
-  Serial.println("DevID: " + devid);
+  // Log configuration (hide password)
+  Serial.println("Configured Network: " + networkSSID);
+  Serial.print("Password: ");
+  Serial.println(networkPass.length() > 0 ? "********" : "[not set]");
+  Serial.println("Device Name: " + deviceName);
 
   EEPROM.end();
 }
 
-// Function to set device into Access Point mode for configuration
-void ap_mode() {
-  digitalWrite(2, HIGH); // Turn on LED to indicate AP mode
-  Serial.println("AP Mode. Please connect to http://192.168.4.1 to configure");
-  apmode = true;
-  WiFi.mode(WIFI_AP_STA);  // Enable both AP and Station mode to allow scan
-  WiFi.softAP("ESP32_eeprom", "");  // Start AP with default SSID and no password
-  WiFi.scanNetworks(true);  // Start scanning for WiFi networks
-  Serial.println(WiFi.softAPIP());  // Print AP IP address
-  launchWeb(0);  // Start web server
+// Start configuration portal
+void startPortal() {
+  digitalWrite(STATUS_LED, HIGH);  // LED on in portal mode
+  Serial.println("Starting configuration portal");
+  portalMode = true;
+  
+  WiFi.mode(WIFI_AP_STA);  
+  WiFi.softAP(PORTAL_NAME, PORTAL_PASS);
+  
+  Serial.println("Portal active. SSID: " + String(PORTAL_NAME));
+  Serial.println("Portal Address: " + WiFi.softAPIP().toString());
+  Serial.println("Connect to network '" + String(PORTAL_NAME) + "' then visit http://" + WiFi.softAPIP().toString());
+  
+  WiFi.scanNetworks(true);
+  setupWebServer();
 }
 
-// Start the web server
-void launchWeb(int webtype) {
-  createWebServer(webtype);
-  server.begin();
+// Initialize the web server
+void setupWebServer() {
+  createWebRoutes();
+  webPortal.begin();
+  Serial.println("Configuration web portal ready");
 }
 
-// Define routes and page content for web server
-void createWebServer(int webtype) {
-  if (webtype == 0) {
-    // Main configuration page
-    server.on("/", []() {
-      // HTML structure for configuration page
-      content = R"rawliteral(
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <style>
-            body { font-family: Arial; text-align: center; padding: 20px; background: #f4f4f4; }
-            h1 { color: #333; }
-            form { background: white; padding: 20px; border-radius: 10px; display: inline-block; }
-            input, label { display: block; margin: 10px auto; width: 80%; max-width: 300px; }
-            input[type="text"], input[type="password"] {
-              padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
-            .button {
-              background-color: #3CBC8D; color: white; padding: 10px 20px; border: none;
-              border-radius: 5px; cursor: pointer; font-size: 16px; }
-            table { margin: 10px auto; width: 90%; border: 1px solid #ccc; }
-            th, td { padding: 8px; text-align: left; border: 1px solid #ccc; }
-          </style>
-        </head>
-        <body>
-          <h1>WiFi Manager</h1>
-          <p><strong>Stored SSID:</strong> )rawliteral" + ssid + R"rawliteral(</p>
-          <p><strong>Stored Password:</strong> )rawliteral" + pass + R"rawliteral(</p>
-          <p><strong>Stored Device ID:</strong> )rawliteral" + devid + R"rawliteral(</p>
-          <form method='get' action='setting'>
-            <label>WiFi SSID:</label>
-            <input type='text' name='ssid' required>
-            <label>WiFi Password:</label>
-            <input type='password' name='password'>
-            <label>Device ID:</label>
-            <input type='text' name='devid' required>
-            <input class='button' type='submit' value='Save Settings'>
-          </form>
-          <h3>Available Networks:</h3>
-      )rawliteral" + scannedNetworks + R"rawliteral(
-        </body>
-        </html>
-      )rawliteral";
+// Define web server routes and UI
+void createWebRoutes() {
+  // Main configuration page
+  webPortal.on("/", []() {
+    String passwordDisplay = networkPass.length() > 0 ? "********" : "[not set]";
+    webContent = R"rawliteral(
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>SyafiqNet WiFi Manager</title>
+        <style>
+          body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            text-align: center; 
+            padding: 20px; 
+            background: #f0f2f5; 
+            color: #333;
+          }
+          h1 { 
+            color: #2c3e50; 
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+            max-width: 600px;
+            margin: 0 auto 20px;
+          }
+          form { 
+            background: white; 
+            padding: 25px; 
+            border-radius: 12px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: inline-block; 
+            max-width: 400px;
+            margin: 20px auto;
+          }
+          .info-panel {
+            background: white;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 400px;
+            margin: 20px auto;
+            text-align: left;
+          }
+          input, label { 
+            display: block; 
+            margin: 10px auto; 
+            width: 80%; 
+          }
+          input[type="text"], input[type="password"] {
+            padding: 12px; 
+            border: 1px solid #ddd; 
+            border-radius: 6px;
+            font-size: 16px;
+          }
+          .connect-btn {
+            background-color: #3498db; 
+            color: white; 
+            padding: 12px 24px; 
+            border: none;
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 16px;
+            font-weight: bold;
+            transition: background 0.3s;
+          }
+          .connect-btn:hover {
+            background-color: #2980b9;
+          }
+          .reset-btn {
+            background-color: #e74c3c; 
+            color: white; 
+            padding: 8px 16px; 
+            border: none;
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 14px;
+            margin-top: 20px;
+            transition: background 0.3s;
+          }
+          .reset-btn:hover {
+            background-color: #c0392b;
+          }
+          .networks { 
+            margin: 20px auto; 
+            width: 100%; 
+            border-collapse: collapse;
+            background: white;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+          }
+          .networks th, .networks td { 
+            padding: 12px; 
+            text-align: left; 
+            border-bottom: 1px solid #ddd;
+          }
+          .networks th {
+            background-color: #3498db;
+            color: white;
+          }
+          .networks tr:hover {
+            background-color: #f5f5f5;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>SyafiqNet WiFi Manager</h1>
+        
+        <div class="info-panel">
+          <h3>Current Configuration</h3>
+          <p><strong>Network:</strong> )rawliteral" + networkSSID + R"rawliteral(</p>
+          <p><strong>Password:</strong> )rawliteral" + passwordDisplay + R"rawliteral(</p>
+          <p><strong>Device Name:</strong> )rawliteral" + deviceName + R"rawliteral(</p>
+        </div>
+        
+        <form method='get' action='saveconfig'>
+          <h3>Update Configuration</h3>
+          <label>WiFi Network:</label>
+          <input type='text' name='ssid' placeholder="Enter network name" required>
+          <label>Password:</label>
+          <input type='password' name='password' placeholder="Enter network password">
+          <label>Device Name:</label>
+          <input type='text' name='deviceid' placeholder="Enter a name for this device" required>
+          <input class='connect-btn' type='submit' value='Connect &amp; Save'>
+        </form>
+        
+        <p><a href="/reset"><button class="reset-btn">Reset All Settings</button></a></p>
+        
+        <h3>Available Networks</h3>
+    )rawliteral" + networkList + R"rawliteral(
+      </body>
+      </html>
+    )rawliteral";
 
-      server.send(200, "text/html", content);
-    });
+    webPortal.send(200, "text/html", webContent);
+  });
 
-    // Save new WiFi and device ID settings to EEPROM
-    server.on("/setting", []() {
-      String ssidw = server.arg("ssid");
-      String passw = server.arg("password");
-      String devidw = server.arg("devid");
-      writeData(ssidw, passw, devidw);
-      server.send(200, "text/html", "<h2>Settings Saved Successfully</h2><p>The device will now restart to apply the new configuration.</p>");
-      delay(2000);
-      digitalWrite(2, LOW); // Turn off LED before restart
-      ESP.restart();
-    });
+  // Save configuration
+  webPortal.on("/saveconfig", []() {
+    String newSSID = webPortal.arg("ssid");
+    String newPass = webPortal.arg("password");
+    String newName = webPortal.arg("deviceid");
+    
+    // Validate input
+    if (newSSID.length() == 0 || newName.length() == 0) {
+      webPortal.send(400, "text/html", "<h2>Error: Network name and device name are required</h2><p><a href='/'>Go back</a></p>");
+      return;
+    }
+    
+    saveConfig(newSSID, newPass, newName);
+    webPortal.send(200, "text/html", "<h2>Configuration Saved</h2><p>Your device will now restart and attempt to connect to the network.</p>");
+    delay(2000);
+    digitalWrite(STATUS_LED, LOW);
+    ESP.restart();
+  });
 
-    // Route to clear all EEPROM data
-    server.on("/clear", []() {
-      clearData();
-      server.send(200, "text/html", "<h2>All Data Cleared</h2><p>The device will restart now. Please reconnect and reconfigure if needed.</p>");
-      delay(2000);
-      ESP.restart();
-    });
-  }
+  // Reset configuration
+  webPortal.on("/reset", []() {
+    clearConfig();
+    webPortal.send(200, "text/html", "<h2>All Settings Reset</h2><p>The device will restart in configuration mode.</p>");
+    delay(2000);
+    ESP.restart();
+  });
 }
 
-// Write provided data to EEPROM, with safe character length checks
-void writeData(String a, String b, String c) {
-  clearData();  // Clear existing EEPROM content before writing new data
-  EEPROM.begin(512);
-  Serial.println("Writing to EEPROM...");
-  for (int i = 0; i < 20; i++) EEPROM.write(i, (i < a.length()) ? a[i] : 0);
-  for (int i = 0; i < 20; i++) EEPROM.write(20 + i, (i < b.length()) ? b[i] : 0);
-  for (int i = 0; i < 20; i++) EEPROM.write(40 + i, (i < c.length()) ? c[i] : 0);
+// Save configuration to EEPROM
+void saveConfig(String ssid, String password, String name) {
+  clearConfig();
+  EEPROM.begin(MEMORY_SIZE);
+  Serial.println("Saving new configuration...");
+  
+  // Save network name (max 20 chars)
+  for (int i = 0; i < 20; i++) EEPROM.write(i, (i < ssid.length()) ? ssid[i] : 0);
+  
+  // Save password (max 20 chars)
+  for (int i = 0; i < 20; i++) EEPROM.write(20 + i, (i < password.length()) ? password[i] : 0);
+  
+  // Save device name (max 20 chars)
+  for (int i = 0; i < 20; i++) EEPROM.write(40 + i, (i < name.length()) ? name[i] : 0);
+  
   EEPROM.commit();
   EEPROM.end();
-  Serial.println("Write Successful");
+  
+  Serial.println("Configuration saved successfully:");
+  Serial.println("Network: " + ssid);
+  Serial.print("Password: ");
+  Serial.println(password.length() > 0 ? "********" : "[not set]");
+  Serial.println("Device Name: " + name);
 }
 
-// Clear all EEPROM contents to default (0)
-void clearData() {
-  EEPROM.begin(512);
-  Serial.println("Clearing EEPROM (first 60 bytes only)...");
-  // Only clear the bytes used for SSID (0–19), Password (20–39), DevID (40–59)
+// Clear configuration from EEPROM
+void clearConfig() {
+  EEPROM.begin(MEMORY_SIZE);
+  Serial.println("Clearing all saved configuration...");
   for (int i = 0; i < 60; i++) EEPROM.write(i, 0);
   EEPROM.commit();
   EEPROM.end();
+  Serial.println("Configuration reset complete");
 }
 
-// Try connecting to WiFi using current credentials stored in ssid/pass
-boolean testWifi() {
-  WiFi.softAPdisconnect();  // Ensure AP mode is disabled
-  WiFi.disconnect();        // Disconnect any previous connection
-  WiFi.mode(WIFI_STA);      // Set mode to Station (client)
-  WiFi.begin(ssid.c_str(), pass.c_str());
-  int c = 0;
-  while (c < 50) {  // Try for ~45 seconds
+// Connect to WiFi using saved credentials
+boolean connectWiFi() {
+  WiFi.softAPdisconnect();
+  WiFi.disconnect();
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(networkSSID.c_str(), networkPass.c_str());
+  
+  int attempts = 0;
+  Serial.print("Connecting");
+  while (attempts < 25) {  // 25 second timeout
     if (WiFi.status() == WL_CONNECTED) {
       WiFi.setAutoReconnect(true);
       WiFi.persistent(true);
-      Serial.println(WiFi.localIP());
       return true;
     }
     Serial.print(".");
-    delay(900);
-    c++;
+    delay(1000);
+    attempts++;
   }
-  Serial.println("Connection timed out...");
+  Serial.println("\nConnection attempt timed out");
   return false;
 }

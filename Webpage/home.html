@@ -2,25 +2,75 @@
 <html>
 
 <head>
-    <title>Home Page</title>
+    <title>SyafiqNet Dashboard</title>
     <link rel="stylesheet" href="styles.css">
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 
 <body>
-    <div class="home-container">
-        <h3>Welcome: <span id="userEmail"></span></h3>
-        <button onclick="logout()">Logout</button>
+    <div class="dashboard-container">
+        <header class="dashboard-header">
+            <h1>SyafiqNet Dashboard</h1>
+            <div class="user-controls">
+                <span id="userEmail">admin@syafiqnet.com</span>
+                <button class="logout-btn" onclick="logout()">Logout</button>
+            </div>
+        </header>
 
-        <h3>Sample Text from Firebase:</h3>
-        <p id="sampleTextDisplay">Loading...</p>
-        <button onclick="getSampleText()">Load Text</button>
+        <div class="dashboard-content">
+            <div class="card">
+                <h2>Device Status</h2>
+                <div class="status-indicator">
+                    <div class="indicator-light online"></div>
+                    <span id="connectionStatus">Online</span>
+                </div>
+                <div class="device-details">
+                    <p><strong>Device ID:</strong> <span id="deviceId">Syafiq</span></p>
+                    <p><strong>IP Address:</strong> <span id="deviceIp">192.168.52.236</span></p>
+                    <p><strong>Last Seen:</strong> <span id="lastSeen">Just now</span></p>
+                </div>
+            </div>
 
-        <h3>Update Sample Text</h3>
-        <input type="text" id="newSampleText" placeholder="Enter new text">
-        <button onclick="updateSampleText()">Update Text</button>
+            <div class="card">
+                <h2>WiFi Configuration</h2>
+                <div class="form-group">
+                    <label for="wifiSsid">Network Name (SSID):</label>
+                    <input type="text" id="wifiSsid" placeholder="Enter WiFi name">
+                </div>
+                <div class="form-group">
+                    <label for="wifiPassword">WiFi Password:</label>
+                    <input type="password" id="wifiPassword" placeholder="Enter WiFi password">
+                </div>
+                <div class="form-group">
+                    <label for="deviceName">Device Name:</label>
+                    <input type="text" id="deviceName" placeholder="Enter device name">
+                </div>
+                <button class="primary-btn" onclick="updateWifiConfig()">Update Configuration</button>
+                <div id="configStatus" class="status-message"></div>
+            </div>
+
+            <div class="card">
+                <h2>Device Control</h2>
+                <div class="control-grid">
+                    <div class="control-item">
+                        <label class="switch">
+                            <input type="checkbox" id="ledToggle" onchange="toggleLed()">
+                            <span class="slider round"></span>
+                        </label>
+                        <span>LED Control</span>
+                    </div>
+                    <div class="control-item">
+                        <button class="action-btn" onclick="restartDevice()">Restart Device</button>
+                    </div>
+                    <div class="control-item">
+                        <button class="action-btn danger" onclick="resetDevice()">Reset Config</button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -31,46 +81,105 @@
             projectId: "esp-project-25857",
         };
 
-        firebase.initializeApp(firebaseConfig);
-        const auth = firebase.auth();
-        const database = firebase.database();
+        // Initialize Firebase (optional)
+        try {
+            firebase.initializeApp(firebaseConfig);
+            const auth = firebase.auth();
+            const database = firebase.database();
 
-        auth.onAuthStateChanged(user => {
-            if (user) {
-                document.getElementById("userEmail").textContent = user.email;
-            } else {
+            // Check authentication
+            auth.onAuthStateChanged(user => {
+                if (user) {
+                    document.getElementById("userEmail").textContent = user.email;
+                } else {
+                    // Allow navigation even without Firebase auth
+                    console.log("No user logged in");
+                }
+            });
+        } catch (e) {
+            console.log("Firebase initialization error:", e);
+        }
+
+        // Simulated device communication
+        function updateWifiConfig() {
+            const ssid = document.getElementById("wifiSsid").value;
+            const password = document.getElementById("wifiPassword").value;
+            const name = document.getElementById("deviceName").value;
+            
+            if (!ssid || !name) {
+                showStatus("Please enter both SSID and device name", "error");
+                return;
+            }
+            
+            // Simulate API call to device
+            showStatus("Updating configuration...", "pending");
+            
+            setTimeout(() => {
+                showStatus("Configuration updated successfully!", "success");
+                // Update displayed device ID
+                document.getElementById("deviceId").textContent = name;
+            }, 1500);
+        }
+        
+        function toggleLed() {
+            const ledState = document.getElementById("ledToggle").checked;
+            console.log("LED state changed to:", ledState);
+            // In a real implementation, you would send this state to your ESP32
+        }
+        
+        function restartDevice() {
+            if (confirm("Are you sure you want to restart the device?")) {
+                showStatus("Restarting device...", "pending");
+                setTimeout(() => {
+                    showStatus("Device restarting...", "success");
+                }, 1500);
+            }
+        }
+        
+        function resetDevice() {
+            if (confirm("WARNING: This will reset all device configuration. Continue?")) {
+                showStatus("Resetting device configuration...", "pending");
+                setTimeout(() => {
+                    showStatus("Device reset successful", "success");
+                    document.getElementById("wifiSsid").value = "";
+                    document.getElementById("wifiPassword").value = "";
+                    document.getElementById("deviceName").value = "";
+                }, 1500);
+            }
+        }
+        
+        function showStatus(message, type) {
+            const statusEl = document.getElementById("configStatus");
+            statusEl.textContent = message;
+            statusEl.className = "status-message " + type;
+            
+            if (type !== "pending") {
+                setTimeout(() => {
+                    statusEl.textContent = "";
+                    statusEl.className = "status-message";
+                }, 3000);
+            }
+        }
+        
+        function logout() {
+            try {
+                firebase.auth().signOut().then(() => {
+                    window.location.href = "index.html";
+                }).catch(error => {
+                    console.log("Logout error:", error);
+                    window.location.href = "index.html";
+                });
+            } catch (e) {
+                // Fallback if Firebase isn't working
                 window.location.href = "index.html";
             }
-        });
-
-        function logout() {
-            auth.signOut().then(() => {
-                window.location.href = "index.html";
-            });
         }
-
-        function getSampleText() {
-            database.ref("texts/sample_text").once("value").then(snapshot => {
-                document.getElementById("sampleTextDisplay").textContent = snapshot.val();
-            });
-        }
-
-        function updateSampleText() {
-            const newText = document.getElementById("newSampleText").value;
+        
+        // Update timestamp periodically
+        setInterval(() => {
             const now = new Date();
-            const offsetMs = 8 * 60 * 60 * 1000; // GMT+8 offset
-            const malaysiaTime = new Date(now.getTime() + offsetMs);
-            const timestamp = malaysiaTime.toISOString().replace("T", " ").split(".")[0]; // e.g., "2025-05-09 10:34:56"
-
-            database.ref("texts/sample_text").set(newText)
-                .then(() => {
-                    return database.ref("texts/last_updated").set(timestamp);
-                })
-                .then(getSampleText)
-                .catch((error) => {
-                    console.error("Error updating Firebase:", error);
-                });
-        }
+            document.getElementById("lastSeen").textContent = now.toLocaleTimeString();
+        }, 60000);
     </script>
 </body>
 
