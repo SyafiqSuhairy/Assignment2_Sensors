@@ -40,8 +40,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 // Firebase config
 #define API_KEY "AIzaSyDujFmyj4gC_qSMuYzNalpDuZEa_61adqM"
 #define DATABASE_URL "https://esp-project-25857-default-rtdb.asia-southeast1.firebasedatabase.app/"
-#define USER_EMAIL "test1@example.com"
-#define USER_PASSWORD "123456"
+#define USER_EMAIL "admin@syafiqnet.com"
+#define USER_PASSWORD "admin123"
 
 WebServer webPortal(80);           // Web server on standard HTTP port
 
@@ -129,22 +129,68 @@ void setup() {
 
 // Initialize Firebase connection
 void initializeFirebase() {
+  Serial.println("\nInitializing Firebase connection...");
+  Serial.println("API Key: " + String(API_KEY));
+  Serial.println("Database URL: " + String(DATABASE_URL));
+  Serial.println("Auth Email: " + String(USER_EMAIL));
+  
   config.api_key = API_KEY;
   config.database_url = DATABASE_URL;
   auth.user.email = USER_EMAIL;
   auth.user.password = USER_PASSWORD;
 
-  Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
-
-  Serial.println("Authenticating with Firebase...");
-  while (auth.token.uid == "") {
+  
+  // Print debug information before initialization
+  Serial.println("Firebase client version: " + String(FIREBASE_CLIENT_VERSION));
+  Serial.println("Free Heap: " + String(ESP.getFreeHeap()));
+  Serial.println("Establishing connection to Firebase...");
+  
+  // Begin Firebase with timeout handling
+  unsigned long startAttempt = millis();
+  Firebase.begin(&config, &auth);
+  Serial.println("Firebase.begin completed");
+  
+  Serial.println("Waiting for authentication...");
+  unsigned long authTimeout = 15000; // 15 seconds timeout
+  unsigned long startAuth = millis();
+  bool authComplete = false;
+  
+  while (!authComplete && (millis() - startAuth < authTimeout)) {
+    if (Firebase.ready()) {
+      Serial.println("\nFirebase authenticated and ready!");
+      authComplete = true;
+      break;
+    }
+    
+    // Check if we have a valid token yet
+    if (auth.token.uid.length() > 0) {
+      Serial.println("Authentication successful. UID: " + String(auth.token.uid.c_str()));
+      authComplete = true;
+      break;
+    }
+    
     Serial.print(".");
     delay(500);
   }
-  Serial.println("\nFirebase Ready!");
   
-  // Setup Firebase listeners for device control
+  if (!authComplete) {
+    Serial.println("\nAuthentication timed out. May continue with limited functionality.");
+  }
+  
+  // Test database connectivity regardless of auth status
+  Serial.println("Testing database connection...");
+  FirebaseJson json;
+  json.add("message", "Device connected at " + String(millis()));
+  json.add("ip", WiFi.localIP().toString());
+  
+  if (Firebase.RTDB.updateNode(&fbdo, "device/connect_log", &json)) {
+    Serial.println("Database connection successful!");
+  } else {
+    Serial.println("Database connection test failed: " + fbdo.errorReason());
+  }
+  
+  // Setup Firebase listeners
   setupFirebaseListeners();
 }
 
@@ -158,10 +204,32 @@ void setupFirebaseListeners() {
       Serial.println("Initial LED state set to: " + String(ledState ? "ON" : "OFF"));
     }
     
-    // Create a display text node if it doesn't exist
-    if (!Firebase.RTDB.getString(&fbdo, "/display/text")) {
-      Firebase.RTDB.setString(&fbdo, "/display/text", "Welcome to SyafiqNet!");
-      Serial.println("Created initial display text in Firebase");
+    // Check if the display text exists and print its value for debugging
+    Serial.println("Checking for display text in Firebase...");
+    
+    // Try multiple potential paths to find the correct one
+    if (Firebase.RTDB.getString(&fbdo, "/display/text")) {
+      Serial.println("Found display text at /display/text: " + fbdo.stringData());
+      message = fbdo.stringData();
+    } else {
+      Serial.println("Failed to read /display/text: " + fbdo.errorReason());
+      
+      // Try without leading slash
+      if (Firebase.RTDB.getString(&fbdo, "display/text")) {
+        Serial.println("Found display text at display/text: " + fbdo.stringData());
+        message = fbdo.stringData();
+      } else {
+        Serial.println("Failed to read display/text: " + fbdo.errorReason());
+        
+        // Create the path if it doesn't exist
+        Serial.println("Creating initial display text in Firebase...");
+        if (Firebase.RTDB.setString(&fbdo, "/display/text", "Welcome to SyafiqNet!")) {
+          Serial.println("Created display text node successfully");
+          message = "Welcome to SyafiqNet!";
+        } else {
+          Serial.println("Failed to create display text: " + fbdo.errorReason());
+        }
+      }
     }
   }
 }
@@ -203,16 +271,38 @@ void checkDeviceCommands() {
   }
 }
 
-// Read data from Firebase
+// Read data from Firebase with debugging information
 String readFirebaseData(String path) {
   if (Firebase.ready()) {
+    Serial.println("Reading Firebase data from path: " + path);
+    
+    // Try to read data
     if (Firebase.RTDB.getString(&fbdo, path)) {
-      return fbdo.stringData();
+      String data = fbdo.stringData();
+      Serial.println("Successfully read data: " + data);
+      return data;
     } else {
-      Serial.println("Failed to read from Firebase: " + fbdo.errorReason());
-      return "Error";
+      String error = fbdo.errorReason();
+      Serial.println("Failed to read from path " + path + ": " + error);
+      
+      // Try without leading slash if the path starts with one
+      if (path.startsWith("/")) {
+        String altPath = path.substring(1);
+        Serial.println("Trying alternative path: " + altPath);
+        
+        if (Firebase.RTDB.getString(&fbdo, altPath)) {
+          String data = fbdo.stringData();
+          Serial.println("Successfully read data from alt path: " + data);
+          return data;
+        } else {
+          Serial.println("Failed to read from alt path: " + fbdo.errorReason());
+        }
+      }
+      
+      return "Error: " + error;
     }
   }
+  Serial.println("Firebase not ready for data reading");
   return "Firebase not ready";
 }
 
@@ -300,11 +390,30 @@ void loop() {
       lastFirebaseRead = millis();
       
       if (Firebase.ready()) {
-        Serial.println("Reading Firebase data from path: /display/text");
-        String displayText = readFirebaseData("/display/text");
-        Serial.println("Text from Firebase: " + displayText);
-
-        if (displayText != "Error" && displayText.length() > 0) {
+        // Try both possible paths to read the display text
+        String displayText = "";
+        bool readSuccess = false;
+        
+        // Try with leading slash
+        if (Firebase.RTDB.getString(&fbdo, "/display/text")) {
+          displayText = fbdo.stringData();
+          Serial.println("Successfully read text from /display/text: " + displayText);
+          readSuccess = true;
+        } else {
+          Serial.println("Failed to read /display/text: " + fbdo.errorReason());
+          
+          // Try without leading slash
+          if (Firebase.RTDB.getString(&fbdo, "display/text")) {
+            displayText = fbdo.stringData();
+            Serial.println("Successfully read text from display/text: " + displayText);
+            readSuccess = true;
+          } else {
+            Serial.println("Failed to read display/text: " + fbdo.errorReason());
+          }
+        }
+        
+        if (readSuccess && displayText.length() > 0) {
+          Serial.println("Updating display with text: " + displayText);
           message = displayText;
           xPos = SCREEN_WIDTH;
           messageWidth = message.length() * 6; // Adjust based on font size
