@@ -53,6 +53,21 @@
             </div>
 
             <div class="card">
+                <h2>OLED Display Control</h2>
+                <div class="form-group">
+                    <label for="displayText">Display Text:</label>
+                    <input type="text" id="displayText" placeholder="Enter text to show on OLED">
+                </div>
+                <button class="primary-btn" onclick="updateDisplayText()">Update Display</button>
+                <div id="displayStatus" class="status-message"></div>
+                <div class="current-display">
+                    <h3>Current Display Text</h3>
+                    <p id="currentText">Loading...</p>
+                    <small>Last updated: <span id="lastUpdated">Never</span></small>
+                </div>
+            </div>
+
+            <div class="card">
                 <h2>Device Control</h2>
                 <div class="control-grid">
                     <div class="control-item">
@@ -81,23 +96,82 @@
             projectId: "esp-project-25857",
         };
 
-        // Initialize Firebase (optional)
+        let database;
+
+        // Initialize Firebase
         try {
             firebase.initializeApp(firebaseConfig);
             const auth = firebase.auth();
-            const database = firebase.database();
+            database = firebase.database();
 
             // Check authentication
             auth.onAuthStateChanged(user => {
                 if (user) {
                     document.getElementById("userEmail").textContent = user.email;
                 } else {
-                    // Allow navigation even without Firebase auth
-                    console.log("No user logged in");
+                    // For demo purposes, still allow access
+                    console.log("No user logged in, allowing access for demo");
                 }
             });
+
+            // Set up real-time listener for display text
+            loadCurrentDisplayText();
         } catch (e) {
-            console.log("Firebase initialization error:", e);
+            console.error("Firebase initialization error:", e);
+            document.getElementById("displayStatus").textContent = "Firebase connection error";
+            document.getElementById("displayStatus").className = "status-message error";
+        }
+
+        // Function to load the current display text from Firebase
+        function loadCurrentDisplayText() {
+            try {
+                database.ref('/display/text').on('value', (snapshot) => {
+                    const text = snapshot.val() || "";
+                    document.getElementById("currentText").textContent = text;
+                    document.getElementById("lastUpdated").textContent = new Date().toLocaleTimeString();
+                });
+            } catch (e) {
+                console.error("Error reading from Firebase:", e);
+            }
+        }
+
+        // Function to update the display text in Firebase
+        function updateDisplayText() {
+            const text = document.getElementById("displayText").value.trim();
+            if (!text) {
+                showDisplayStatus("Please enter a message to display", "error");
+                return;
+            }
+
+            try {
+                showDisplayStatus("Updating display text...", "pending");
+                
+                database.ref('/display/text').set(text)
+                    .then(() => {
+                        showDisplayStatus("Display text updated successfully!", "success");
+                        document.getElementById("displayText").value = "";
+                    })
+                    .catch(error => {
+                        console.error("Firebase write error:", error);
+                        showDisplayStatus("Failed to update display text: " + error.message, "error");
+                    });
+            } catch (e) {
+                console.error("Error writing to Firebase:", e);
+                showDisplayStatus("Error updating display: " + e.message, "error");
+            }
+        }
+
+        function showDisplayStatus(message, type) {
+            const statusEl = document.getElementById("displayStatus");
+            statusEl.textContent = message;
+            statusEl.className = "status-message " + type;
+            
+            if (type !== "pending") {
+                setTimeout(() => {
+                    statusEl.textContent = "";
+                    statusEl.className = "status-message";
+                }, 3000);
+            }
         }
 
         // Simulated device communication
@@ -124,27 +198,61 @@
         function toggleLed() {
             const ledState = document.getElementById("ledToggle").checked;
             console.log("LED state changed to:", ledState);
-            // In a real implementation, you would send this state to your ESP32
+            
+            try {
+                // Update LED state in Firebase
+                database.ref('/device/led').set(ledState)
+                    .then(() => {
+                        console.log("LED state updated in Firebase");
+                    })
+                    .catch(error => {
+                        console.error("Error updating LED state:", error);
+                    });
+            } catch (e) {
+                console.error("Firebase error:", e);
+            }
         }
         
         function restartDevice() {
             if (confirm("Are you sure you want to restart the device?")) {
                 showStatus("Restarting device...", "pending");
-                setTimeout(() => {
-                    showStatus("Device restarting...", "success");
-                }, 1500);
+                
+                try {
+                    // Set a restart flag in Firebase
+                    database.ref('/device/restart').set(true)
+                        .then(() => {
+                            showStatus("Restart command sent", "success");
+                        })
+                        .catch(error => {
+                            showStatus("Failed to send restart command", "error");
+                        });
+                } catch (e) {
+                    console.error("Firebase error:", e);
+                    showStatus("Error sending restart command", "error");
+                }
             }
         }
         
         function resetDevice() {
             if (confirm("WARNING: This will reset all device configuration. Continue?")) {
                 showStatus("Resetting device configuration...", "pending");
-                setTimeout(() => {
-                    showStatus("Device reset successful", "success");
-                    document.getElementById("wifiSsid").value = "";
-                    document.getElementById("wifiPassword").value = "";
-                    document.getElementById("deviceName").value = "";
-                }, 1500);
+                
+                try {
+                    // Set a reset flag in Firebase
+                    database.ref('/device/reset').set(true)
+                        .then(() => {
+                            showStatus("Reset command sent", "success");
+                            document.getElementById("wifiSsid").value = "";
+                            document.getElementById("wifiPassword").value = "";
+                            document.getElementById("deviceName").value = "";
+                        })
+                        .catch(error => {
+                            showStatus("Failed to send reset command", "error");
+                        });
+                } catch (e) {
+                    console.error("Firebase error:", e);
+                    showStatus("Error sending reset command", "error");
+                }
             }
         }
         

@@ -149,6 +149,13 @@ button:hover {
     padding-bottom: 0.5rem;
 }
 
+.card h3 {
+    color: #475569;
+    font-size: 1.1rem;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
 .status-indicator {
     display: flex;
     align-items: center;
@@ -296,6 +303,33 @@ input:checked + .slider:before {
 
 .slider.round:before {
     border-radius: 50%;
+}
+
+/* Current Display Section */
+.current-display {
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background-color: #f8fafc;
+    border-radius: 8px;
+    border-left: 4px solid #3b82f6;
+}
+
+.current-display h3 {
+    margin-top: 0;
+    color: #1e40af;
+}
+
+.current-display p {
+    font-size: 1.1rem;
+    margin: 0.5rem 0;
+    word-break: break-word;
+}
+
+.current-display small {
+    display: block;
+    color: #64748b;
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
 }
 
 /* Responsive adjustments */

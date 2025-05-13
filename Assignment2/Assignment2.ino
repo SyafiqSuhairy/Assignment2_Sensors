@@ -20,12 +20,28 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <HTTPClient.h>
+#include <Firebase_ESP_Client.h>
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
 #define PORTAL_NAME "SyafiqNet"    // Portal network name
 #define PORTAL_PASS ""             // Portal password (empty = open network)
 #define STATUS_LED 2               // Status LED pin
 #define CONFIG_BTN 0               // Config button pin
 #define MEMORY_SIZE 512            // EEPROM allocation size
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 32
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// Firebase config
+#define API_KEY "AIzaSyDujFmyj4gC_qSMuYzNalpDuZEa_61adqM"
+#define DATABASE_URL "https://esp-project-25857-default-rtdb.asia-southeast1.firebasedatabase.app/"
+#define USER_EMAIL "test1@example.com"
+#define USER_PASSWORD "123456"
 
 WebServer webPortal(80);           // Web server on standard HTTP port
 
@@ -37,6 +53,22 @@ String webContent = "";
 bool portalMode = false;           // Operating in portal/AP mode?
 bool scanFinished = false;         // Network scan completed?
 String networkList = "<p>Scanning available networks...</p>";
+String message = "";
+int16_t xPos = SCREEN_WIDTH;
+
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+// Display message on OLED screen
+void showOLEDMessage(String msg) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 10);
+  display.print(msg);
+  display.display();
+}
 
 // Initialization function
 void setup() {
@@ -46,12 +78,22 @@ void setup() {
   Serial.begin(115200);
   Serial.println("\n\n=== SyafiqNet WiFi Manager Starting ===");
   
+  // Initialize OLED display
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED initialization failed");
+    while (1);
+  }
+  
+  showOLEDMessage("Starting...");
+  delay(1000);
+  
   // Load saved configuration
   loadConfig();  
 
   // Enter config mode if no network configured
   if (networkSSID.length() == 0) {
     Serial.println("No network configured, starting setup portal");
+    showOLEDMessage("No WiFi. AP Mode");
     startPortal();
     return;
   }
@@ -62,20 +104,116 @@ void setup() {
   // Force config mode if button pressed
   if (digitalRead(CONFIG_BTN) == 0) {
     Serial.println("Setup button pressed, starting portal");
+    showOLEDMessage("Button pressed\nAP Mode");
     portalMode = true;
     startPortal();
   } else {
     // Try connecting to WiFi using stored credentials
+    showOLEDMessage("Connecting WiFi...");
     Serial.println("Attempting to connect to: " + networkSSID);
     if (connectWiFi()) {
       Serial.println("Successfully connected to network!");
       Serial.println("Device IP: " + WiFi.localIP().toString());
+      showOLEDMessage("WiFi Connected\nIP: " + WiFi.localIP().toString());
+      delay(3000); // Show IP for 3 seconds
+      initializeFirebase();
+      showOLEDMessage("Firebase Ready!");
     } else {
       Serial.println("Connection failed. Starting setup portal.");
+      showOLEDMessage("WiFi Failed\nAP Mode");
       startPortal();
       portalMode = true;
     }
   }
+}
+
+// Initialize Firebase connection
+void initializeFirebase() {
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+
+  Serial.println("Authenticating with Firebase...");
+  while (auth.token.uid == "") {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println("\nFirebase Ready!");
+  
+  // Setup Firebase listeners for device control
+  setupFirebaseListeners();
+}
+
+// Set up Firebase listeners for device control
+void setupFirebaseListeners() {
+  if (Firebase.ready()) {
+    // Set initial LED state
+    if (Firebase.RTDB.getBool(&fbdo, "/device/led")) {
+      bool ledState = fbdo.boolData();
+      digitalWrite(STATUS_LED, ledState ? HIGH : LOW);
+      Serial.println("Initial LED state set to: " + String(ledState ? "ON" : "OFF"));
+    }
+    
+    // Create a display text node if it doesn't exist
+    if (!Firebase.RTDB.getString(&fbdo, "/display/text")) {
+      Firebase.RTDB.setString(&fbdo, "/display/text", "Welcome to SyafiqNet!");
+      Serial.println("Created initial display text in Firebase");
+    }
+  }
+}
+
+// Check for device control commands from Firebase
+void checkDeviceCommands() {
+  if (!Firebase.ready()) return;
+  
+  // Check LED state
+  if (Firebase.RTDB.getBool(&fbdo, "/device/led")) {
+    bool ledState = fbdo.boolData();
+    digitalWrite(STATUS_LED, ledState ? HIGH : LOW);
+    Serial.println("LED state changed to: " + String(ledState ? "ON" : "OFF"));
+  }
+  
+  // Check for restart command
+  if (Firebase.RTDB.getBool(&fbdo, "/device/restart")) {
+    if (fbdo.boolData()) {
+      Serial.println("Restart command received from Firebase");
+      // Clear the restart flag
+      Firebase.RTDB.setBool(&fbdo, "/device/restart", false);
+      showOLEDMessage("Restarting...");
+      delay(2000);
+      ESP.restart();
+    }
+  }
+  
+  // Check for reset command
+  if (Firebase.RTDB.getBool(&fbdo, "/device/reset")) {
+    if (fbdo.boolData()) {
+      Serial.println("Reset command received from Firebase");
+      // Clear the reset flag
+      Firebase.RTDB.setBool(&fbdo, "/device/reset", false);
+      showOLEDMessage("Resetting config...");
+      delay(2000);
+      clearConfig();
+      ESP.restart();
+    }
+  }
+}
+
+// Read data from Firebase
+String readFirebaseData(String path) {
+  if (Firebase.ready()) {
+    if (Firebase.RTDB.getString(&fbdo, path)) {
+      return fbdo.stringData();
+    } else {
+      Serial.println("Failed to read from Firebase: " + fbdo.errorReason());
+      return "Error";
+    }
+  }
+  return "Firebase not ready";
 }
 
 // Main program loop
@@ -110,6 +248,99 @@ void loop() {
         networkList += "</table>";
         scanFinished = true;
         WiFi.scanDelete();
+      }
+    }
+  } else {
+    static unsigned long lastFirebaseRead = 0;
+    static unsigned long lastScrollTime = 0;
+    static unsigned long lastStatusUpdate = 0;
+    static unsigned long lastCommandCheck = 0;
+    static int16_t messageWidth = 0;
+    static int wifiReconnectAttempts = 0;
+    static const int MAX_RECONNECT_ATTEMPTS = 5;  // Maximum WiFi reconnection attempts before switching to AP mode
+
+    // Check WiFi connection and attempt to reconnect if disconnected
+    if (WiFi.status() != WL_CONNECTED) {
+      showOLEDMessage("WiFi Disconnected!\nReconnecting...");
+      Serial.println("WiFi disconnected. Attempting to reconnect...");
+      
+      if (WiFi.reconnect()) {
+        Serial.println("Reconnect initiated");
+      } else {
+        Serial.println("Failed to initiate reconnect");
+      }
+      
+      wifiReconnectAttempts++;
+      Serial.println("Reconnect attempt: " + String(wifiReconnectAttempts));
+      
+      // If multiple reconnect attempts fail, switch to AP mode
+      if (wifiReconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        Serial.println("Max reconnect attempts reached. Switching to AP mode.");
+        showOLEDMessage("WiFi Failed\nSwitching to AP Mode");
+        delay(2000);
+        startPortal();
+        portalMode = true;
+        wifiReconnectAttempts = 0;
+        return;
+      }
+      
+      delay(1000);  // Brief delay before continuing
+    } else {
+      wifiReconnectAttempts = 0;  // Reset the counter if connected
+    }
+
+    // Check for device commands from Firebase every 2 seconds
+    if (millis() - lastCommandCheck >= 2000) {
+      lastCommandCheck = millis();
+      checkDeviceCommands();
+    }
+
+    // Read message from Firebase every 5 seconds
+    if (millis() - lastFirebaseRead >= 5000) {
+      lastFirebaseRead = millis();
+      
+      if (Firebase.ready()) {
+        Serial.println("Reading Firebase data from path: /display/text");
+        String displayText = readFirebaseData("/display/text");
+        Serial.println("Text from Firebase: " + displayText);
+
+        if (displayText != "Error" && displayText.length() > 0) {
+          message = displayText;
+          xPos = SCREEN_WIDTH;
+          messageWidth = message.length() * 6; // Adjust based on font size
+        }
+      } else {
+        Serial.println("Firebase not ready");
+      }
+    }
+
+    // Update scrolling text on OLED display
+    if (millis() - lastScrollTime >= 50) { // Slightly slower scroll for better readability
+      lastScrollTime = millis();
+      display.clearDisplay();
+      
+      // Display connection status at top
+      display.setTextSize(1);
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(0, 0);
+      display.print("Status: ");
+      display.print(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+      
+      // Display device info
+      display.setCursor(0, 10);
+      display.print("ID: ");
+      display.print(deviceName);
+      
+      // Scrolling Firebase message
+      display.setCursor(xPos, 22);
+      display.print(message);
+      
+      display.display();
+      
+      // Scroll logic
+      xPos--;
+      if (xPos < -messageWidth) {
+        xPos = SCREEN_WIDTH;
       }
     }
   }
@@ -159,6 +390,7 @@ void startPortal() {
   Serial.println("Portal Address: " + WiFi.softAPIP().toString());
   Serial.println("Connect to network '" + String(PORTAL_NAME) + "' then visit http://" + WiFi.softAPIP().toString());
   
+  showOLEDMessage("AP Mode\n" + WiFi.softAPIP().toString());
   WiFi.scanNetworks(true);
   setupWebServer();
 }

@@ -26,34 +26,72 @@
         const firebaseConfig = {
             apiKey: "AIzaSyDujFmyj4gC_qSMuYzNalpDuZEa_61adqM",
             authDomain: "esp-project-25857.firebaseapp.com",
+            databaseURL: "https://esp-project-25857-default-rtdb.asia-southeast1.firebasedatabase.app/",
+            projectId: "esp-project-25857",
         };
 
-        firebase.initializeApp(firebaseConfig);
-        const auth = firebase.auth();
+        try {
+            firebase.initializeApp(firebaseConfig);
+            const auth = firebase.auth();
 
-        // Check if already logged in
-        auth.onAuthStateChanged(user => {
-            if (user) {
-                window.location.href = "home.html";
-            }
-        });
+            // Check if already logged in
+            auth.onAuthStateChanged(user => {
+                if (user) {
+                    window.location.href = "home.html";
+                }
+            });
+        } catch (e) {
+            console.error("Firebase initialization error:", e);
+            document.getElementById("loginMessage").textContent = "Firebase connection error. Try again later.";
+            document.getElementById("loginMessage").style.color = "red";
+        }
 
         function login() {
             const email = document.getElementById("email").value;
             const password = document.getElementById("password").value;
             const message = document.getElementById("loginMessage");
 
-            // Simple local authentication for demo purposes
+            if (!email || !password) {
+                message.textContent = "Please enter both email and password";
+                message.style.color = "red";
+                return;
+            }
+
+            message.textContent = "Logging in...";
+            message.style.color = "blue";
+
+            // Default login
             if (email === "admin@syafiqnet.com" && password === "admin123") {
-                // Sign in with Firebase (optional - can be removed if not using Firebase)
-                auth.signInWithEmailAndPassword(email, password)
-                    .then(() => {
-                        window.location.href = "home.html";
-                    })
-                    .catch(error => {
-                        // If Firebase fails, still allow local login
-                        window.location.href = "home.html";
-                    });
+                // Try to sign in with Firebase
+                try {
+                    // First, try to create the user if it doesn't exist
+                    firebase.auth().createUserWithEmailAndPassword(email, password)
+                        .then(() => {
+                            window.location.href = "home.html";
+                        })
+                        .catch(error => {
+                            // If user already exists, try to sign in
+                            if (error.code === "auth/email-already-in-use") {
+                                firebase.auth().signInWithEmailAndPassword(email, password)
+                                    .then(() => {
+                                        window.location.href = "home.html";
+                                    })
+                                    .catch(err => {
+                                        console.error("Firebase auth error:", err);
+                                        // Allow access anyway for demo purposes
+                                        window.location.href = "home.html";
+                                    });
+                            } else {
+                                console.error("Firebase auth error:", error);
+                                // Allow access anyway for demo purposes
+                                window.location.href = "home.html";
+                            }
+                        });
+                } catch (e) {
+                    console.error("Firebase error:", e);
+                    // Allow access anyway for demo purposes
+                    window.location.href = "home.html";
+                }
             } else {
                 message.textContent = "Invalid email or password";
                 message.style.color = "red";
